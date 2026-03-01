@@ -1,45 +1,39 @@
-from rest_framework import generics, permissions, viewsets, filters
-from django_filters.rest_framework import DjangoFilterBackend
-from django.contrib.auth.models import User
+from rest_framework import viewsets, permissions, status
+from rest_framework.response import Response
 from .models import Task
-from .serializers import TaskSerializer, UserSerializer
-from rest_framework.authentication import TokenAuthentication
-
-class RegisterView(generics.CreateAPIView):
-    queryset = User.objects.all()
-    permission_classes = (permissions.AllowAny,)
-    serializer_class = UserSerializer
-
-class UserViewSet(viewsets.ModelViewSet):
-    """
-    Requirement: CRUD operations for users. 
-    Users can only manage their own profile data.
-    """
-    serializer_class = UserSerializer
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [TokenAuthentication]
-
-    def get_queryset(self):
-        return User.objects.filter(id=self.request.user.id)
+from .serializers import TaskSerializer
 
 class TaskViewSet(viewsets.ModelViewSet):
-    """
-    Requirement: CRUD for Tasks with Filtering and Sorting.
-    """
     serializer_class = TaskSerializer
     permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [TokenAuthentication]
-    
-    # Requirement: Filter by Status, Priority, and Due Date.
-    # Requirement: Sort by Due Date or Priority Level.
-    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
-    filterset_fields = ['status', 'priority', 'due_date']
-    ordering_fields = ['due_date', 'priority']
 
     def get_queryset(self):
-        # Requirement: Ensure tasks are only accessible to the users who created them.
-        return Task.objects.filter(owner=self.request.user)
+        # Ensure users only see their own tasks
+        return Task.objects.filter(user=self.request.user)
 
     def perform_create(self, serializer):
-        # Requirement: Task Ownership.
-        serializer.save(owner=self.request.user)
+        serializer.save(user=self.request.user)
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        
+        # Logic: Locked if Completed, unless changing back to Pending
+        if instance.status == 'Completed':
+            new_status = request.data.get('status')
+            if new_status != 'Pending':
+                return Response(
+                    {"error": "This task is completed and locked. Change status to Pending to edit."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        # Logic: Cannot delete completed tasks
+        if instance.status == 'Completed':
+            return Response(
+                {"error": "Completed tasks cannot be deleted."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        return super().destroy(request, *args, **kwargs)
